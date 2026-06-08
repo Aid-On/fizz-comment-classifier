@@ -1,0 +1,92 @@
+// fizz_comment_classifier — コメント文面 → リアクション感情。
+//
+// 責務 (一行): コメントの文面から、こちらが返すリアクション感情を判定する。
+//
+// 旧 openaituber src/comment/classifier.ts の移植。正規表現の代わりに
+// 部分文字列キーワード集合で照合する (Almide は正規表現リテラルが無く、
+// このタスクには substring で十分・テストしやすい)。
+// ルールは順序が意味を持つ (fun を joy より先に見る等)。最初に当たった
+// ルールの感情を返す。どれにも当たらなければ none (= 呼び出し側は無リアクション)。
+//
+// 入力 → 出力: String → Option[fizz_protocol.emotion.Emotion]
+
+import fizz_protocol.emotion
+
+type Rule = {
+  emotion: emotion.Emotion,
+  // いずれか 1 つでも含まれていれば発火する語。
+  keywords: List[String],
+}
+
+// 上から順に評価。先勝ち。
+let RULES: List[Rule] = [
+  // 爆笑系 (joy より先)
+  Rule { emotion: emotion.Fun, keywords: ["www", "ｗｗｗ", "草草", "草生", "大草原", "lmao", "爆笑", "ロロ"] },
+  // 笑い
+  Rule { emotion: emotion.Joy, keywords: ["笑", "草", "haha", "hehe", "lol", "ｗ", "🤣", "😂", "😄", "😆", "😁"] },
+  // 嬉しい / 好意
+  Rule { emotion: emotion.Happy, keywords: ["😊", "🙂", "嬉", "happy", "うれし", "楽し", "good", "👍", "nice", "最高", "よかった", "ありがと", "thx", "thanks", "すき", "好き", "かわい", "可愛"] },
+  // ウインク
+  Rule { emotion: emotion.Wink, keywords: ["😉", ";)", "ぱちっ", "ウインク", "ウィンク"] },
+  // 驚き
+  Rule { emotion: emotion.Surprised, keywords: ["！？", "!?", "びっくり", "びびっ", "まさか", "何それ", "なんで", "wat", "what", "wtf", "😲", "😱", "wow", "えっ", "マジ", "まじ"] },
+  // 悲しい / 泣き
+  Rule { emotion: emotion.Sad, keywords: ["悲し", "つら", "辛い", "涙", "泣", "sad", "cry", "😭", "😢", "残念", "ごめん", "さみし", "寂し"] },
+  // 怒り
+  Rule { emotion: emotion.Angry, keywords: ["怒", "腹立", "ムカ", "キレ", "fuck", "shit", "💢", "😠", "😡", "許さ", "やめろ", "うるさ"] },
+  // 半目 / 冷め
+  Rule { emotion: emotion.Jitome, keywords: ["またか", "またこれ", "めんどく", "だる", "興味な", "どうでもい", "半目", "じとめ"] },
+  // まったり
+  Rule { emotion: emotion.Relaxed, keywords: ["まったり", "ゆっくり", "chill", "relax", "落ち着", "平和", "☕", "😌"] },
+]
+
+local fn matches(text: String, kws: List[String]) -> Bool =
+  list.fold(kws, false, (hit, kw) => hit or string.contains(text, kw))
+
+// 最初に当たったルールの感情を返す。
+fn classify(text: String) -> Option[emotion.Emotion] = {
+  let lower = string.to_lower(text)
+  classify_rec(lower, RULES)
+}
+
+local fn classify_rec(text: String, rules: List[Rule]) -> Option[emotion.Emotion] =
+  match list.first(rules) {
+    none    => none,
+    some(r) =>
+      if matches(text, r.keywords) then some(r.emotion)
+      else classify_rec(text, list.drop(rules, 1)),
+  }
+
+// ── in-file tests ────────────────────────────────────────────────────
+
+test "laughing variants" {
+  assert_eq(classify("wwww"), some(emotion.Fun))
+  assert_eq(classify("それは草"), some(emotion.Joy))
+  assert_eq(classify("haha nice"), some(emotion.Joy))
+}
+
+test "positive affect" {
+  assert_eq(classify("配信ありがとう！"), some(emotion.Happy))
+  assert_eq(classify("かわいいね"), some(emotion.Happy))
+}
+
+test "surprise / sadness / anger" {
+  assert_eq(classify("まじで！？"), some(emotion.Surprised))
+  assert_eq(classify("それは悲しい…"), some(emotion.Sad))
+  assert_eq(classify("ムカつく"), some(emotion.Angry))
+}
+
+test "cool and relaxed" {
+  assert_eq(classify("またこれか、だるい"), some(emotion.Jitome))
+  assert_eq(classify("まったりしようよ"), some(emotion.Relaxed))
+}
+
+test "no keyword -> none" {
+  assert_eq(classify("今日の天気はどうですか"), none)
+  assert_eq(classify(""), none)
+}
+
+test "english is matched case-insensitively" {
+  assert_eq(classify("THANKS so much"), some(emotion.Happy))
+  assert_eq(classify("WTF"), some(emotion.Surprised))
+}
